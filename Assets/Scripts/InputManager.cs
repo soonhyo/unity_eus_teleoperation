@@ -14,7 +14,7 @@ public class InputManager : MonoBehaviour
     
     private ROSConnection ros;
     private bool isInitPose = false;
-    
+    private bool menuToggle = false;
     private float rightTriggerValue = 0.0f;
     private float leftTriggerValue = 0.0f;
 

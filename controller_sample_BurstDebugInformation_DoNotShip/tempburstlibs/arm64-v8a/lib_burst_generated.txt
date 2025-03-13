@@ -13,6 +13,9 @@ Library: /home/s-kim-lab/XRXR/Temp/BurstOutput/tempburstlibs/arm64-v8a/lib_burst
 --assembly-defines=Meta.XR.ImmersiveDebugger.Interface;
 --assembly-defines=Meta.XR.ImmersiveDebugger;
 --assembly-defines=Mono.Security;
+--assembly-defines=Oculus.Interaction.OVR;
+--assembly-defines=Oculus.Interaction.Samples;
+--assembly-defines=Oculus.Interaction;
 --assembly-defines=Oculus.VR;
 --assembly-defines=System.Configuration;
 --assembly-defines=System.Core;
@@ -63,6 +66,9 @@ Library: /home/s-kim-lab/XRXR/Temp/BurstOutput/tempburstlibs/arm64-v8a/lib_burst
 --assembly-defines=Meta.XR.ImmersiveDebugger.Interface;
 --assembly-defines=Meta.XR.ImmersiveDebugger;
 --assembly-defines=Mono.Security;
+--assembly-defines=Oculus.Interaction.OVR;
+--assembly-defines=Oculus.Interaction.Samples;
+--assembly-defines=Oculus.Interaction;
 --assembly-defines=Oculus.VR;
 --assembly-defines=System.Configuration;
 --assembly-defines=System.Core;
