@@ -137,7 +137,7 @@ public class CameraSync : MonoBehaviour
             {
                 tfTransform = transform;
                 isTfStaticReceived = true;
-                //ros.Unsubscribe(tfStaticTopic); // 정적 변환은 한 번만 필요하므로 구독 해제
+                ros.Unsubscribe(tfStaticTopic); // 정적 변환은 한 번만 필요하므로 구독 해제
                 Debug.Log("TF static transform received: camera_link -> camera_color_frame");
                 break;
             }
@@ -145,28 +145,31 @@ public class CameraSync : MonoBehaviour
     }// TODO: need to change camera color frame to camera_color_optical_frame but the transform is not specified in the tf_static,
     // so we use camera_color_frame transform for now. It needs to be changed external trasforming api
 
-    // camera_link에서 camera_color_optical_frame으로의 변환을 OVRCameraRig에 적용
     void ApplyTransformToOVRCamera()
     {
         if (tfTransform == null) return;
 
-        // target (camera_link 기준) 위치와 회전
+        // Get target (relative to camera_link) position and rotation
         Vector3 targetPosition = target.transform.position;
         Quaternion targetRotation = target.transform.rotation;
 
-        // TF 변환 데이터 가져오기
+        // Retrieve TF transformation data
         Vector3 tfPosition = tfTransform.transform.translation.From<FLU>();
         Quaternion tfRotation = tfTransform.transform.rotation.From<FLU>();
 
-        // 변환 적용: camera_link -> camera_color_optical_frame
+        // Apply transformation: camera_link -> camera_color_optical_frame
         Vector3 adjustedPosition = targetPosition + targetRotation * tfPosition;
-        // Quaternion adjustedRotation = targetRotation * tfRotation;
-        Quaternion adjustedRotation = targetRotation;
-        // OVRCameraRig에 적용
+
+        // Maintain only the Y-axis rotation and remove X and Z rotations
+        Vector3 eulerRotation = (targetRotation * tfRotation).eulerAngles;
+        eulerRotation.x = 0; // Remove pitch (X-axis rotation)
+        eulerRotation.z = 0; // Remove roll (Z-axis rotation)
+        Quaternion adjustedRotation = Quaternion.Euler(eulerRotation);
+
+        // Apply transformation to OVRCameraRig
         ovrCameraRig.transform.position = adjustedPosition;
         ovrCameraRig.transform.rotation = adjustedRotation;
     }
-
     void UpdateCameraParameters(CameraInfoMsg message)
     {
         if (isParametersSet)

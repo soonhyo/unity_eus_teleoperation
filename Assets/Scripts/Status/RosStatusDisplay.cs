@@ -9,6 +9,7 @@ public class ROSStatusDisplay : MonoBehaviour
 
     public TextMeshProUGUI rosStatusText;
     public TextMeshProUGUI teleopStatusText;
+    public GameObject menu;
 
     private bool isROSConnected = false;
     private bool isTeleopOn = false;
@@ -18,31 +19,36 @@ public class ROSStatusDisplay : MonoBehaviour
         if (Instance == null)
         {
             Instance = this;
-            DontDestroyOnLoad(gameObject); // 씬 변경 시 유지
+            DontDestroyOnLoad(gameObject);
         }
         else
         {
-            Destroy(gameObject); // 중복 생성 방지
+            Destroy(gameObject);
             return;
         }
     }
 
     private void Start()
     {
+        InvokeRepeating(nameof(CheckROSConnection), 0f, 1f);
         UpdateUI();
     }
 
     private void Update()
     {
-        // ROS 연결 상태 체크
-        isROSConnected = ROSConnection.GetOrCreateInstance().HasConnectionThread;
-        
-        // OVRInput을 사용하여 A 버튼 입력 감지
+        // isROSConnected = !ROSConnection.GetOrCreateInstance().HasConnectionError;
+        // Debug.Log($"isROSConnected:{isROSConnected}");
         if (OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.RTouch))
         {
             ToggleTeleoperation();
         }
 
+        // UpdateUI();
+    }
+
+    private void CheckROSConnection()
+    {
+        isROSConnected = !ROSConnection.GetOrCreateInstance().HasConnectionError;
         UpdateUI();
     }
 
@@ -64,6 +70,25 @@ public class ROSStatusDisplay : MonoBehaviour
     public void ToggleTeleoperation()
     {
         isTeleopOn = !isTeleopOn;
+
+        MeshRenderer renderer = menu.GetComponent<MeshRenderer>();
+        if (renderer != null)
+        {
+            Material[] materials = renderer.materials;
+            Color targetColor = isTeleopOn ? Color.blue : Color.red;
+
+            for (int i = 0; i < materials.Length; i++)
+            {
+                materials[i].color = targetColor;
+            }
+
+            renderer.materials = materials;
+        }
+        else
+        {
+            Debug.LogError("no mesh renderer in menu");
+        }
+
         UpdateUI();
     }
 

@@ -7,7 +7,6 @@ using RosMessageTypes.Tf2;
 
 public class TFSubscriber : MonoBehaviour
 {
-    //public static TFSubscriber Instance { get; private set; }
     public string tfTopic = "/tf";
     [SerializeField] private GameObject m_Robot;
 
@@ -17,19 +16,8 @@ public class TFSubscriber : MonoBehaviour
     private Dictionary<string, Quaternion> targetRotations = new Dictionary<string, Quaternion>();
     private bool isPoseInitialized;
 
-    // private void Awake()
-    // {
-    //     if (Instance == null)
-    //     {
-    //         Instance = this;
-    //         DontDestroyOnLoad(gameObject); // 씬 변경 시 유지
-    //     }
-    //     else
-    //     {
-    //         Destroy(gameObject); // 중복 생성 방지
-    //         return;
-    //     }
-    // }
+    private int tfCount = 0;
+    private float tfTimer = 0;
 
     void Start()
     {
@@ -41,8 +29,19 @@ public class TFSubscriber : MonoBehaviour
             jointTransforms[child.name] = child;
         }
     }
+
     void UpdateURDFTransforms(TFMessageMsg tfMessage)
     {
+        tfCount++;
+        tfTimer += Time.deltaTime;
+
+        if (tfTimer > 1.0)
+        {
+            Debug.Log("TF HZ: " + tfCount);
+            tfCount = 0;
+            tfTimer = 0;
+        }
+
         foreach (TransformStampedMsg tf in tfMessage.transforms)
         {
             if (jointTransforms.TryGetValue(tf.child_frame_id, out Transform jointTransform))
@@ -55,6 +54,7 @@ public class TFSubscriber : MonoBehaviour
 
     void FixedUpdate()
     {
+        
         foreach (var joint in jointTransforms)
         {
             if (targetPositions.TryGetValue(joint.Key, out Vector3 targetPos) &&

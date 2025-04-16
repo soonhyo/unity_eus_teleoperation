@@ -1,57 +1,63 @@
 using UnityEngine;
-using UnityEngine.UI; // UI 관련 기능을 사용하기 위해 추가
+using UnityEngine.UI;
 using Unity.Robotics.ROSTCPConnector;
 using RosMessageTypes.Sensor;
 
 public class ImageSubscriber : MonoBehaviour
 {
-    public RawImage rawImage; // Inspector에서 할당할 RawImage 컴포넌트
-    public string topicName = "/camera/image_raw"; // 단일 토픽 이름
-    public bool compressed = false; // Compressed 이미지 사용 여부를 토글
-    private ROSConnection ros;
+    public RawImage rawImage;
+    public string topic = "/camera/image_raw";
+    public bool compressed = false; 
+    private ROSConnection _ros;
     private Texture2D tex;
     private byte[] imageData;
-    
+    public bool _enabled = false;
+
     void Start()
     {
-        // ROS 연결 초기화
-        ros = ROSConnection.GetOrCreateInstance();
 
-        // 토글 값에 따라 적절한 메시지 타입 구독
-        if (compressed)
+        _ros = ROSConnection.GetOrCreateInstance();
+
+        if (_enabled){
+            if (compressed)
+            {
+                _ros.Subscribe<CompressedImageMsg>(topic, ReceiveCompressedMsg);
+                Debug.Log("Subscribing to compressed image topic: " + topic);
+            }
+            else
+            {
+                _ros.Subscribe<ImageMsg>(topic, ReceiveImageMsg);
+                Debug.Log("Subscribing to image topic: " + topic);
+            }
+        }
+
+        tex = new Texture2D(1, 1, TextureFormat.RGB24, false);
+    }
+    void ToggleRepeating()
+    {
+        if (!_enabled)
         {
-            ros.Subscribe<CompressedImageMsg>(topicName, ReceiveCompressedMsg);
-            Debug.Log("Subscribing to compressed image topic: " + topicName);
+            CancelInvoke(nameof(UpdateRawImage));
         }
         else
         {
-            ros.Subscribe<ImageMsg>(topicName, ReceiveImageMsg);
-            Debug.Log("Subscribing to image topic: " + topicName);
+            InvokeRepeating(nameof(UpdateRawImage), 0f, 1/30f);
         }
-
-        // 텍스처 초기화 (초기 크기는 임의로 작게 설정, 동적으로 조정됨)
-        tex = new Texture2D(1, 1, TextureFormat.RGB24, false);
-
-        // RawImage에 텍스처 업데이트
-        InvokeRepeating("UpdateRawImage", 0f, 1/30f);
     }
-
-    // 일반 이미지 메시지 수신 처리
     void ReceiveImageMsg(ImageMsg image)
     {
         if (image.encoding == "rgb8" || image.encoding == "bgr8")
         {
-            // 텍스처 크기 조정
+            // size of texture
             if (tex.width != (int)image.width || tex.height != (int)image.height)
             {
                 tex.Reinitialize((int)image.width, (int)image.height);
             }
 
-            // RGB8 또는 BGR8 데이터 로드
             tex.LoadRawTextureData(image.data);
             tex.Apply();
 
-            // BGR8인 경우 RGB로 변환
+            // BGR8 -> RGB
             if (image.encoding == "bgr8")
             {
                 Color32[] pixels = tex.GetPixels32();
@@ -65,23 +71,20 @@ public class ImageSubscriber : MonoBehaviour
                 tex.Apply();
             }
 
-            // RawImage에 텍스처 업데이트
             UpdateRawImage();
         }
         else
         {
-            Debug.LogWarning("지원되지 않는 이미지 인코딩: " + image.encoding);
+            Debug.LogWarning("Not supporting type of image: " + image.encoding);
         }
     }
 
     float prevTime = 0;
     int count = 0;
 
-    // 압축 이미지 메시지 수신 처리
     void ReceiveCompressedMsg(CompressedImageMsg compressedImage)
     {
         imageData = compressedImage.data;
-           // 통신 주파수 표시
         float currentTime = Time.time;
         count++;
         if (currentTime - prevTime > 1.0f)
@@ -92,20 +95,40 @@ public class ImageSubscriber : MonoBehaviour
         }
     }
 
-    // RawImage에 텍스처 업데이트
     private void UpdateRawImage()
     {
-        // 텍스처에 압축 데이터 로드 (JPEG 또는 PNG)
         tex.LoadImage(imageData);
         tex.Apply();
 
         rawImage.texture = tex;
 
     }
-
+    public void ToggleEnabled()
+    {
+        _enabled = !_enabled;
+        if (!_enabled)
+        {
+            _ros.Unsubscribe(topic);
+            Debug.Log("Unsubscribed to " + topic);
+        }
+        else
+        {
+            if (compressed)
+            {
+                _ros.Subscribe<CompressedImageMsg>(topic, ReceiveCompressedMsg);
+                Debug.Log("Subscribing to compressed image topic: " + topic);
+            }
+            else
+            {
+                _ros.Subscribe<ImageMsg>(topic, ReceiveImageMsg);
+                Debug.Log("Subscribing to image topic: " + topic);
+            }
+        }
+        ToggleRepeating();
+    }
+    
     void OnDestroy()
     {
-        // 텍스처 정리
         if (tex != null)
         {
             Destroy(tex);

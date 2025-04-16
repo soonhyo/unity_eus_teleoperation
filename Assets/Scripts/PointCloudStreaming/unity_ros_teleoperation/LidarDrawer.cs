@@ -50,7 +50,7 @@ public class LidarDrawer : MonoBehaviour
     private int _LidarDataSize = 4 * 6;
     private ROSConnection _ros;
     private Mesh mesh;
-    public bool _enabled = true;
+    public bool _enabled = false;
     public GameObject _parent;
     private bool _missingParent = false;
     private int _numPts = 0;
@@ -88,8 +88,11 @@ public class LidarDrawer : MonoBehaviour
 
     void Start()
     {
-        _ros.Subscribe<PointCloud2Msg>(topic, OnPointcloud);
-        _ros.Subscribe<TFMessageMsg>(tfStaticTopic, UpdateTFStaticTransform); // tf_static 구독 추가
+        if (_enabled)
+        {
+            _ros.Subscribe<PointCloud2Msg>(topic, OnPointcloud);
+            _ros.Subscribe<TFMessageMsg>(tfStaticTopic, UpdateTFStaticTransform); // tf_static 구독 추가
+        }
     }
 
     private Mesh CreateQuadMesh()
@@ -126,7 +129,7 @@ public class LidarDrawer : MonoBehaviour
                 tfTransform = transform;
                 Debug.Log("UpdateTFStaticTransform LidarDrawer " + transform);
                 isTfStaticReceived = true;
-                // _ros.Unsubscribe(tfStaticTopic); // 정적 변환은 한 번만 필요하므로 구독 해제
+                _ros.Unsubscribe(tfStaticTopic); // 정적 변환은 한 번만 필요하므로 구독 해제
                 Debug.Log("TF static transform received: camera_link -> camera_color_frame");
                 break;
             }
@@ -150,9 +153,9 @@ public class LidarDrawer : MonoBehaviour
         transform.parent = _parent.transform;
         
         // TF 변환 데이터 가져오기
-        tfPosition.x = (float)-tfTransform.transform.translation.y - 0.01f; // manual calibration
-        tfPosition.y = (float)tfTransform.transform.translation.z + 0.02f; // manual calibration
-        tfPosition.z = (float)tfTransform.transform.translation.x - 0.01f; // manual calibration
+        tfPosition.x = (float)-tfTransform.transform.translation.y; // manual calibration
+        tfPosition.y = (float)tfTransform.transform.translation.z; // manual calibration
+        tfPosition.z = (float)tfTransform.transform.translation.x; // manual calibration
         // TODO: need to change using external tf transform api
 
         // 기본 포즌 (camera_link 기준)
@@ -207,6 +210,8 @@ public class LidarDrawer : MonoBehaviour
     {
         if (_enabled)
         {
+            _ros.Subscribe<TFMessageMsg>(tfStaticTopic, UpdateTFStaticTransform); // tf_static 구독 추가
+
             renderParams.matProps.SetMatrix("_ObjectToWorld", transform.localToWorldMatrix);
             Graphics.RenderPrimitivesIndexed(renderParams, MeshTopology.Triangles, _meshTriangles, _meshTriangles.count, (int)mesh.GetIndexStart(0), _numPts);
         }
@@ -256,7 +261,7 @@ public class LidarDrawer : MonoBehaviour
         if (!_enabled)
         {
             _ros.Unsubscribe(topic);
-            _parent = null;
+            // _parent = null;
             Debug.Log("Unsubscribed to " + topic);
         }
         else
