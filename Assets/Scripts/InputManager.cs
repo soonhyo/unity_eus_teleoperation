@@ -16,7 +16,7 @@ public class InputManager : MonoBehaviour
     private readonly List<string> targetValues = new List<string> { "right_hand", "left_hand" };
     
     private ROSConnection ros;
-    private bool isInitPose = false;
+    // private bool isInitPose = false;
     private bool isDataRecording = false;
     private bool canStartRecording = true;
     private IEnumerator AllowStartAfterDelay(float delay)
@@ -34,6 +34,7 @@ public class InputManager : MonoBehaviour
     private float cancelHoldTime = 0f;
     private const float cancelHoldThreshold = 3f;
     private bool isCancelSent = false;
+    private bool isRelativePoseControl = false;
 
     private readonly Dictionary<ControllerType, ControllerState> controllers = new Dictionary<ControllerType, ControllerState>
     {
@@ -48,7 +49,7 @@ public class InputManager : MonoBehaviour
     private StringMsg commandMsg = new StringMsg{};
     private enum ControllerType { Right, Left }
 
-    private class ControllerState
+    public class ControllerState
     {
         public GameObject ControllerObject;
         public OVRControllerHelper Helper;
@@ -58,6 +59,14 @@ public class InputManager : MonoBehaviour
         public bool GripperToggleMode;
         public float GripperToggleValue;
         public RaycastHit[] RaycastHits = new RaycastHit[10];
+        
+        public Vector3 lastControllerPosition;
+        public Quaternion lastControllerRotation;
+    }
+
+    public void ToggleReletivePoseControl()
+    {
+        isRelativePoseControl = !isRelativePoseControl;
     }
     public void ToggleGripperToggleModeLeft()
     {
@@ -226,11 +235,18 @@ public class InputManager : MonoBehaviour
             return;
         }
 
-        if (!isInitPose)
+        if (isRelativePoseControl)
         {
-            SendInitPose();
-            isInitPose = true;
+            // if true -> check trigger button -> true -> change gripped to true -> add displacement (derivatives) of controller pose to current controller ball pose
+            // change handleGrab compatible with relative pose and absolute pose
+            // if false -> ignore this sentence
         }
+
+        // if (!isInitPose)
+        // {
+        //     SendInitPose();
+        //     isInitPose = true;
+        // }
 
         if (type == ControllerType.Right && OVRInput.GetUp(OVRInput.Button.Two, OVRInput.Controller.RTouch))
         {
@@ -250,7 +266,7 @@ public class InputManager : MonoBehaviour
 
         if (handTriggerValue > 0.5f)
         {
-            HandleGrab(state);
+            HandleGrab(type, state);
             if (state.IsPosePublishing) UpdateTriggerValues(type, state);
         }
         else
@@ -264,13 +280,40 @@ public class InputManager : MonoBehaviour
         }
     }
 
-    private void HandleGrab(ControllerState state)
+    private void HandleGrab(ControllerType type, ControllerState state)
     {
         if (state.IsPosePublishing) return;
 
+        if (isRelativePoseControl)
+        {
+            // Determine which tag to bind based on controller type
+            string targetTag = type == ControllerType.Right ? "right_wrist_target_pose" : "left_wrist_target_pose";
+
+            // Find the corresponding target object in the scene by tag
+            GameObject target = GameObject.FindWithTag(targetTag);
+            if (target != null)
+            {
+                // Parent the target to the controller
+                target.transform.parent = state.ControllerObject.transform;
+
+                // Mark as trapped
+                target.GetComponent<InitTransform>().setInTrapped(true);
+
+                // Enable pose publishing and store current controller pose
+                if (ROSStatusDisplay.Instance.IsROSConnected() && ROSStatusDisplay.Instance.IsTeleoperationOn())
+                {
+                    state.IsPosePublishing = true;
+                }
+
+                state.lastControllerPosition = state.ControllerObject.transform.localPosition;
+                state.lastControllerRotation = state.ControllerObject.transform.localRotation;
+            }
+            return;
+        }
+
         int hitCount = Physics.SphereCastNonAlloc(
             state.ControllerObject.transform.position,
-            0.05f,
+            0.001f,
             state.ControllerObject.transform.forward,
             state.RaycastHits
         );
@@ -318,6 +361,7 @@ public class InputManager : MonoBehaviour
         }
         else
         {
+            // TODO: fix bug; This part seems to be called repeatedly, making the gripper's motion look unnatural.
             if (OVRInput.GetDown(OVRInput.Button.PrimaryIndexTrigger, state.Helper.m_controller))
             {
                 state.GripperToggleValue = 1f - state.GripperToggleValue;
@@ -347,9 +391,31 @@ public class InputManager : MonoBehaviour
         PointMsg rosPosition = pointMsgPool[tag];
         QuaternionMsg rosRotation = quaternionMsgPool[tag];
 
-        Vector3 localPosition = robotRoot.transform.InverseTransformPoint(targetTransform.position);
-        Quaternion localRotation = Quaternion.Inverse(robotRoot.transform.rotation) * targetTransform.rotation;
+        Vector3 currentControllerPos = state.ControllerObject.transform.localPosition;
+        Quaternion currentControllerRot = state.ControllerObject.transform.localRotation;
 
+        Vector3 worldPosition = targetTransform.position;
+        Quaternion worldRotation = targetTransform.rotation;
+
+        if (isRelativePoseControl) // TODO: target's movement is larger movement than controller, that is weird
+        {
+            // Step 1: delta pose in controller's local frame
+            Matrix4x4 T_last = Matrix4x4.TRS(state.lastControllerPosition, state.lastControllerRotation, Vector3.one);
+            Matrix4x4 T_now = Matrix4x4.TRS(currentControllerPos, currentControllerRot, Vector3.one);
+            Matrix4x4 deltaLocal = T_last.inverse * T_now;
+
+            // Step 2: apply delta to target's transform
+            Matrix4x4 T_target = Matrix4x4.TRS(targetTransform.position, targetTransform.rotation, Vector3.one);
+            Matrix4x4 T_target_new = T_target * deltaLocal;
+
+            worldPosition = T_target_new.GetColumn(3);
+            worldRotation = Quaternion.LookRotation(T_target_new.GetColumn(2), T_target_new.GetColumn(1));
+        }
+
+        // Convert to robot-relative frame
+        Vector3 localPosition = robotRoot.transform.InverseTransformPoint(worldPosition);
+        Quaternion localRotation = Quaternion.Inverse(robotRoot.transform.rotation) * worldRotation;
+        
         var fluPosition = localPosition.To<FLU>();
         rosPosition.x = fluPosition.x;
         rosPosition.y = fluPosition.y;
@@ -367,18 +433,15 @@ public class InputManager : MonoBehaviour
 
         ros.Publish(tag, poseMsg);
 
-    if (state.IsGripperPublishing)
+        if (state.IsGripperPublishing && (tag == "right_wrist_target_pose" || tag == "left_wrist_target_pose"))
         {
-            if (tag == "right_wrist_target_pose" || tag == "left_wrist_target_pose")
+            string handTag = tag == "right_wrist_target_pose" ? "right_hand" : "left_hand";
+            if (!publishedHandTags.Contains(handTag))
             {
-                string handTag = tag == "right_wrist_target_pose" ? "right_hand" : "left_hand";
-                if (!publishedHandTags.Contains(handTag))
-                {
-                    Float32Msg handMsg = floatMsgPool[handTag];
-                    handMsg.data = state.TriggerValue;
-                    ros.Publish(handTag, handMsg);
-                    publishedHandTags.Add(handTag);
-                }
+                Float32Msg handMsg = floatMsgPool[handTag];
+                handMsg.data = state.TriggerValue;
+                ros.Publish(handTag, handMsg);
+                publishedHandTags.Add(handTag);
             }
         }
     }
@@ -416,15 +479,19 @@ public class InputManager : MonoBehaviour
 // TODO' add dropdown menu UI for change mode
 
 // Now
-// TODO' add trigger for rosbag
+// TODO' fix bug, the control pose msg is wobbled when grasped the controller ball (important)
+// TODO' fix bug, left and right controller's each gripper state is transfered by grasping . fix bug
 
 // Next
 // TODO' add speed scailing factor -> pending
 // TODO' add body tracker
 // TODO: add force react motion ?
+// TODO' performance issue, need to switch the state of robot vis model
+// TODO: trigger value is not update from real value, so it is weird when left and right controller is changed 
 
 // pending
 // TODO: change hand speed more slowly
 // TODO' add pointcloud? image -> added but slow?
 // TODO' add switch egocentric mode and perspective mode -> need to fix error and ui
+// TODO' add trigger for rosbag * Done but need to change the UI more intuitively
 
