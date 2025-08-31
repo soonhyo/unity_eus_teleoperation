@@ -11,6 +11,7 @@ public class InputManager : MonoBehaviour
 {
     [SerializeField] private GameObject rightController;
     [SerializeField] private GameObject leftController;
+    [SerializeField] private Transform hmdTransform; // HMD/CenterEyeAnchor reference
     
     private readonly List<string> targetPoses = new List<string> { "right_wrist_target_pose", "left_wrist_target_pose", "head_target_pose", "waist_target_pose" };
     private readonly List<string> targetValues = new List<string> { "right_hand", "left_hand" };
@@ -60,14 +61,35 @@ public class InputManager : MonoBehaviour
         public float GripperToggleValue;
         public RaycastHit[] RaycastHits = new RaycastHit[10];
         
-        public Vector3 lastControllerPosition;
-        public Quaternion lastControllerRotation;
+        public Vector3 lockControllerWorldPosition;
+        public Quaternion lockControllerWorldRotation;
+        public Vector3 lockTargetWorldPosition;
+        public Quaternion lockTargetWorldRotation;
+        public Quaternion lockHmdWorldRotation; // HMD rotation at lock time
+        public Quaternion lockRobotWorldRotation; // Robot rotation at lock time
     }
 
     public void ToggleReletivePoseControl()
     {
         isRelativePoseControl = !isRelativePoseControl;
+        
+        // Clear all controller states when switching modes
+        foreach (var controller in controllers)
+        {
+            ClearControllerState(controller.Value);
+        }
     }
+
+    private void ClearControllerState(ControllerState state)
+    {
+        state.lockControllerWorldPosition = Vector3.zero;
+        state.lockControllerWorldRotation = Quaternion.identity;
+        state.lockTargetWorldPosition = Vector3.zero;
+        state.lockTargetWorldRotation = Quaternion.identity;
+        state.lockHmdWorldRotation = Quaternion.identity;
+        state.lockRobotWorldRotation = Quaternion.identity;
+    }
+
     public void ToggleGripperToggleModeLeft()
     {
         var state = controllers[ControllerType.Left];
@@ -286,27 +308,33 @@ public class InputManager : MonoBehaviour
 
         if (isRelativePoseControl)
         {
-            // Determine which tag to bind based on controller type
+            // Direct controller-to-ball matching: left controller -> left ball, right controller -> right ball
             string targetTag = type == ControllerType.Right ? "right_wrist_target_pose" : "left_wrist_target_pose";
 
-            // Find the corresponding target object in the scene by tag
             GameObject target = GameObject.FindWithTag(targetTag);
             if (target != null)
             {
-                // Parent the target to the controller
-                target.transform.parent = state.ControllerObject.transform;
-
-                // Mark as trapped
                 target.GetComponent<InitTransform>().setInTrapped(true);
 
-                // Enable pose publishing and store current controller pose
                 if (ROSStatusDisplay.Instance.IsROSConnected() && ROSStatusDisplay.Instance.IsTeleoperationOn())
                 {
                     state.IsPosePublishing = true;
                 }
 
-                state.lastControllerPosition = state.ControllerObject.transform.localPosition;
-                state.lastControllerRotation = state.ControllerObject.transform.localRotation;
+                // Lock positions when trigger pressed - ball starts from its current position
+                state.lockControllerWorldPosition = state.ControllerObject.transform.position;
+                state.lockControllerWorldRotation = state.ControllerObject.transform.rotation;
+                state.lockTargetWorldPosition = target.transform.position;
+                state.lockTargetWorldRotation = target.transform.rotation;
+                // Store HMD and Robot orientation at lock time
+                if (hmdTransform != null)
+                {
+                    state.lockHmdWorldRotation = hmdTransform.rotation;
+                }
+                if (robotRoot != null)
+                {
+                    state.lockRobotWorldRotation = robotRoot.transform.rotation;
+                }
             }
             return;
         }
@@ -325,7 +353,17 @@ public class InputManager : MonoBehaviour
 
             if (targetPoses.Contains(hitTag))
             {
+                // Absolute mode: preserve control ball position when trapping
+                Vector3 currentWorldPos = hitTransform.position;
+                Quaternion currentWorldRot = hitTransform.rotation;
+                
                 hitTransform.parent = state.ControllerObject.transform;
+                
+                // Restore original world position to prevent jumping
+                hitTransform.position = currentWorldPos;
+                hitTransform.rotation = currentWorldRot;
+                
+                
                 hitTransform.GetComponent<InitTransform>().setInTrapped(true);
 
                 if (ROSStatusDisplay.Instance.IsROSConnected() && ROSStatusDisplay.Instance.IsTeleoperationOn())
@@ -339,15 +377,43 @@ public class InputManager : MonoBehaviour
 
     private void ReleaseChildren(ControllerState state)
     {
-        int childCount = state.ControllerObject.transform.childCount;
-        for (int i = 0; i < childCount; i++)
+        if (isRelativePoseControl)
         {
-            Transform child = state.ControllerObject.transform.GetChild(i);
-            if (targetPoses.Contains(child.tag))
+            // Only release if this controller is currently publishing
+            if (state.IsPosePublishing)
             {
-                child.GetComponent<InitTransform>().setInTrapped(false);
-                child.parent = null;
-                state.IsPosePublishing = false;
+                string targetTag = "";
+                if (state.ControllerObject == rightController)
+                    targetTag = "right_wrist_target_pose";
+                else if (state.ControllerObject == leftController)
+                    targetTag = "left_wrist_target_pose";
+                
+                if (!string.IsNullOrEmpty(targetTag))
+                {
+                    GameObject target = GameObject.FindWithTag(targetTag);
+                    if (target != null)
+                    {
+                        target.GetComponent<InitTransform>().setInTrapped(false);
+                        state.IsPosePublishing = false;
+                        ClearControllerState(state); // Clear state when releasing
+                    }
+                }
+            }
+        }
+        else
+        {
+            // Original absolute mode logic
+            int childCount = state.ControllerObject.transform.childCount;
+            for (int i = 0; i < childCount; i++)
+            {
+                Transform child = state.ControllerObject.transform.GetChild(i);
+                if (targetPoses.Contains(child.tag))
+                {
+                    child.GetComponent<InitTransform>().setInTrapped(false);
+                    child.parent = null;
+                    state.IsPosePublishing = false;
+                    ClearControllerState(state); // Clear state when releasing
+                }
             }
         }
     }
@@ -373,14 +439,37 @@ public class InputManager : MonoBehaviour
     private void PublishChildrenPoses(ControllerState state)
     {
         HashSet<string> publishedHandTags = new HashSet<string>();
-        int childCount = state.ControllerObject.transform.childCount;
-        for (int i = 0; i < childCount; i++)
+        
+        if (isRelativePoseControl)
         {
-            Transform child = state.ControllerObject.transform.GetChild(i);
-            string childTag = child.tag;
-            if (targetPoses.Contains(childTag))
+            // Publish pose for the specific ball controlled by this controller
+            string targetTag = "";
+            if (state.ControllerObject == rightController)
+                targetTag = "right_wrist_target_pose";
+            else if (state.ControllerObject == leftController)
+                targetTag = "left_wrist_target_pose";
+            
+            if (!string.IsNullOrEmpty(targetTag))
             {
-                PublishTargetPose(child, childTag, state, publishedHandTags);
+                GameObject target = GameObject.FindWithTag(targetTag);
+                if (target != null && target.GetComponent<InitTransform>().getInTrapped())
+                {
+                    PublishTargetPose(target.transform, targetTag, state, publishedHandTags);
+                }
+            }
+        }
+        else
+        {
+            // Original absolute mode logic
+            int childCount = state.ControllerObject.transform.childCount;
+            for (int i = 0; i < childCount; i++)
+            {
+                Transform child = state.ControllerObject.transform.GetChild(i);
+                string childTag = child.tag;
+                if (targetPoses.Contains(childTag))
+                {
+                    PublishTargetPose(child, childTag, state, publishedHandTags);
+                }
             }
         }
     }
@@ -391,30 +480,60 @@ public class InputManager : MonoBehaviour
         PointMsg rosPosition = pointMsgPool[tag];
         QuaternionMsg rosRotation = quaternionMsgPool[tag];
 
-        Vector3 currentControllerPos = state.ControllerObject.transform.localPosition;
-        Quaternion currentControllerRot = state.ControllerObject.transform.localRotation;
-
         Vector3 worldPosition = targetTransform.position;
         Quaternion worldRotation = targetTransform.rotation;
+        
 
-        if (isRelativePoseControl) // TODO: target's movement is larger movement than controller, that is weird
+        if (isRelativePoseControl)
         {
-            // Step 1: delta pose in controller's local frame
-            Matrix4x4 T_last = Matrix4x4.TRS(state.lastControllerPosition, state.lastControllerRotation, Vector3.one);
-            Matrix4x4 T_now = Matrix4x4.TRS(currentControllerPos, currentControllerRot, Vector3.one);
-            Matrix4x4 deltaLocal = T_last.inverse * T_now;
-
-            // Step 2: apply delta to target's transform
-            Matrix4x4 T_target = Matrix4x4.TRS(targetTransform.position, targetTransform.rotation, Vector3.one);
-            Matrix4x4 T_target_new = T_target * deltaLocal;
-
-            worldPosition = T_target_new.GetColumn(3);
-            worldRotation = Quaternion.LookRotation(T_target_new.GetColumn(2), T_target_new.GetColumn(1));
+            // Calculate displacement from lock point
+            Vector3 currentControllerWorldPos = state.ControllerObject.transform.position;
+            Quaternion currentControllerWorldRot = state.ControllerObject.transform.rotation;
+            
+            // Calculate raw displacement in world coordinates
+            Vector3 rawPositionDelta = currentControllerWorldPos - state.lockControllerWorldPosition;
+            
+            // Map HMD-relative displacement to robot-root-relative displacement
+            Vector3 positionDelta = rawPositionDelta;
+            if (hmdTransform != null && robotRoot != null)
+            {
+                // Get locked HMD directions (when trigger was pressed)
+                Vector3 lockHmdForward = state.lockHmdWorldRotation * Vector3.forward;
+                Vector3 lockHmdRight = state.lockHmdWorldRotation * Vector3.right;
+                Vector3 lockHmdUp = state.lockHmdWorldRotation * Vector3.up;
+                
+                // Project displacement onto locked HMD axes to get user-relative displacement
+                float forwardDisplacement = Vector3.Dot(rawPositionDelta, lockHmdForward);
+                float rightDisplacement = Vector3.Dot(rawPositionDelta, lockHmdRight);
+                float upDisplacement = Vector3.Dot(rawPositionDelta, lockHmdUp);
+                
+                // Map to robot root coordinate system using LOCKED robot orientation
+                Vector3 lockRobotForward = state.lockRobotWorldRotation * Vector3.forward;
+                Vector3 lockRobotRight = state.lockRobotWorldRotation * Vector3.right;
+                Vector3 lockRobotUp = state.lockRobotWorldRotation * Vector3.up;
+                
+                positionDelta = lockRobotForward * forwardDisplacement + 
+                               lockRobotRight * rightDisplacement + 
+                               lockRobotUp * upDisplacement;
+            }
+            
+            // Calculate rotation displacement
+            Quaternion rotationDelta = currentControllerWorldRot * Quaternion.Inverse(state.lockControllerWorldRotation);
+            
+            // Apply displacement to locked target position and rotation
+            worldPosition = state.lockTargetWorldPosition + positionDelta;
+            worldRotation = rotationDelta * state.lockTargetWorldRotation;
         }
+        // In absolute mode, use targetTransform position/rotation directly
+        // The parent-child relationship handles the positioning automatically
 
-        // Convert to robot-relative frame
-        Vector3 localPosition = robotRoot.transform.InverseTransformPoint(worldPosition);
-        Quaternion localRotation = Quaternion.Inverse(robotRoot.transform.rotation) * worldRotation;
+        // Convert to robot-relative coordinate frame for ROS
+        Vector3 localPosition;
+        Quaternion localRotation;
+        
+        // Both modes need to publish robot-relative coordinates
+        localPosition = robotRoot.transform.InverseTransformPoint(worldPosition);
+        localRotation = Quaternion.Inverse(robotRoot.transform.rotation) * worldRotation;
         
         var fluPosition = localPosition.To<FLU>();
         rosPosition.x = fluPosition.x;
@@ -427,7 +546,18 @@ public class InputManager : MonoBehaviour
         rosRotation.z = fluRotation.z;
         rosRotation.w = fluRotation.w;
 
-        poseMsg.header = headerMsg;
+        // Set appropriate frame_id based on control mode
+        HeaderMsg currentHeader = new HeaderMsg();
+        if (isRelativePoseControl)
+        {
+            currentHeader.frame_id = "base_link"; // Robot-relative frame
+        }
+        else
+        {
+            currentHeader.frame_id = "map"; // World frame for absolute mode
+        }
+        
+        poseMsg.header = currentHeader;
         poseMsg.pose.position = rosPosition;
         poseMsg.pose.orientation = rosRotation;
 

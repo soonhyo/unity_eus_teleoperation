@@ -4,10 +4,27 @@ public class MakeRobotTransparent : MonoBehaviour
 {
     [Range(0f, 1f)]
     public float transparency = 0.5f;
-
+    
+    [Header("Transparent Robot Reference")]
+    public GameObject transparentRobotModel;
+    
+    private bool isVisible = true;
+    
     void Start()
     {
-        MeshRenderer[] renderers = GetComponentsInChildren<MeshRenderer>();
+        if (transparentRobotModel != null)
+        {
+            ApplyTransparencyToModel();
+        }
+        else
+        {
+            Debug.LogWarning("Transparent Robot Model reference is not assigned!");
+        }
+    }
+
+    private void ApplyTransparencyToModel()
+    {
+        MeshRenderer[] renderers = transparentRobotModel.GetComponentsInChildren<MeshRenderer>();
 
         foreach (MeshRenderer renderer in renderers)
         {
@@ -35,5 +52,28 @@ public class MakeRobotTransparent : MonoBehaviour
             // 새 머티리얼 적용
             renderer.material = transparentMat;
         }
+    }
+
+    public void ToggleVisibility()
+    {
+        if (transparentRobotModel != null)
+        {
+            isVisible = !isVisible;
+            transparentRobotModel.SetActive(isVisible);
+        }
+    }
+
+    public void SetVisibility(bool visible)
+    {
+        if (transparentRobotModel != null)
+        {
+            isVisible = visible;
+            transparentRobotModel.SetActive(isVisible);
+        }
+    }
+
+    public bool IsVisible()
+    {
+        return isVisible;
     }
 }
